@@ -1,0 +1,48 @@
+import argparse
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Parse and return command-line arguments for the scraper."""
+    parser = argparse.ArgumentParser(
+        description="Multi-Source Data Scraper and API Client",
+    )
+
+    parser.add_argument(
+        "--source",
+        type=str,
+        required=True,
+        help="URL or API endpoint to scrape/fetch",
+    )
+    parser.add_argument(
+        "--search",
+        type=str,
+        default=None,
+        help="Optional search term",
+    )
+    parser.add_argument(
+        "--format",
+        type=str,
+        choices=["csv", "json"],
+        default="csv",
+        help="Output format (default: csv)",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        required=True,
+        help="Output filename",
+    )
+    parser.add_argument(
+        "--filter-key",
+        type=str,
+        default=None,
+        help="Optional key to filter data by",
+    )
+    parser.add_argument(
+        "--filter-value",
+        type=str,
+        default=None,
+        help="Optional value for the filter key",
+    )
+
+    return parser.parse_args()
