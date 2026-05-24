@@ -5,3 +5,9 @@ playwright
 playwright-stealth
 fake-useragent
 pytest
+sqlalchemy[asyncio]
+psycopg2-binary
+asyncpg
+alembic
+celery
+redis
