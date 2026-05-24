@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from bs4 import BeautifulSoup
 
 from src.logger import setup_logger
 
@@ -7,10 +8,115 @@ logger = setup_logger(__name__)
 
 
 class DataProcessor:
-    """Loads raw data into a DataFrame and provides cleaning utilities."""
+    """Two-stage extraction engine with DataFrame cleaning utilities.
+
+    Stage 1: Fast DOM extraction via BeautifulSoup.
+    Stage 2: LLM fallback via src.ai_parser if Stage 1 fails.
+    """
 
     def __init__(self):
         self.df: pd.DataFrame = pd.DataFrame()
+
+    # ------------------------------------------------------------------
+    # Stage 1: DOM-based extraction
+    # ------------------------------------------------------------------
+
+    def _extract_with_dom(self, html: str) -> list[dict] | None:
+        """Attempt to extract structured data using BeautifulSoup selectors.
+
+        Returns a list of dicts on success, or None if extraction fails or
+        yields no results.
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Strategy A: look for <table> elements
+            tables = soup.find_all("table")
+            if tables:
+                rows = []
+                for table in tables:
+                    headers = [th.get_text(strip=True) for th in table.find_all("th")]
+                    for tr in table.find_all("tr"):
+                        cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+                        if cells:
+                            if headers and len(cells) == len(headers):
+                                rows.append(dict(zip(headers, cells)))
+                            else:
+                                rows.append({f"col_{i}": c for i, c in enumerate(cells)})
+                if rows:
+                    logger.info("DOM extraction (tables): %d rows extracted.", len(rows))
+                    return rows
+
+            # Strategy B: look for repeated item containers
+            selectors = [
+                "article", ".item", ".product", ".card", ".listing",
+                ".result", "[data-item]", ".post",
+            ]
+            for selector in selectors:
+                items = soup.select(selector)
+                if len(items) >= 2:
+                    rows = []
+                    for item in items:
+                        title_el = item.select_one("h1, h2, h3, h4, .title, .name")
+                        price_el = item.select_one(".price, .cost, .amount")
+                        desc_el = item.select_one("p, .description, .summary, .text")
+                        link_el = item.select_one("a[href]")
+                        rows.append({
+                            "title": title_el.get_text(strip=True) if title_el else "",
+                            "price": price_el.get_text(strip=True) if price_el else "",
+                            "description": desc_el.get_text(strip=True) if desc_el else "",
+                            "url": link_el["href"] if link_el else "",
+                        })
+                    logger.info(
+                        "DOM extraction (selector '%s'): %d items extracted.",
+                        selector, len(rows),
+                    )
+                    return rows
+
+            logger.info("DOM extraction found no structured data.")
+            return None
+
+        except Exception as exc:
+            logger.warning("DOM extraction error: %s", exc)
+            return None
+
+    # ------------------------------------------------------------------
+    # Stage 2: LLM fallback
+    # ------------------------------------------------------------------
+
+    def _extract_with_llm(self, html: str) -> list[dict]:
+        """Fallback: use LLM to extract structured data from raw HTML."""
+        from src.ai_parser import extract_with_llm, ExtractedData
+
+        logger.info("Falling back to LLM extraction.")
+        results = extract_with_llm(html, schema=ExtractedData)
+        return [r.model_dump() for r in results]
+
+    # ------------------------------------------------------------------
+    # Public: two-stage extract
+    # ------------------------------------------------------------------
+
+    def extract(self, html: str) -> list[dict]:
+        """Two-stage extraction: DOM first, LLM fallback on failure."""
+        # Stage 1
+        try:
+            records = self._extract_with_dom(html)
+            if records:
+                return records
+        except Exception as exc:
+            logger.warning("Stage 1 (DOM) failed: %s. Triggering LLM fallback.", exc)
+
+        # Stage 2
+        records = self._extract_with_llm(html)
+        if records:
+            return records
+
+        logger.error("Both extraction stages returned no data.")
+        return []
+
+    # ------------------------------------------------------------------
+    # DataFrame utilities (unchanged API)
+    # ------------------------------------------------------------------
 
     def load_data(self, raw_data: list[dict]) -> pd.DataFrame:
         """Convert a list of dictionaries into a Pandas DataFrame."""

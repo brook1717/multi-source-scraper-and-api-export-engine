@@ -11,3 +11,8 @@ asyncpg
 alembic
 celery
 redis
+instructor
+pydantic
+google-genai
+markdownify
+beautifulsoup4
