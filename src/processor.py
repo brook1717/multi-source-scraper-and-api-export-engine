@@ -1,21 +1,28 @@
 import pandas as pd
 import numpy as np
 from bs4 import BeautifulSoup
+from markdownify import markdownify as md
 
 from src.logger import setup_logger
 
 logger = setup_logger(__name__)
 
+# Required fields that must be non-None for a DOM extraction to be valid.
+# If any required field returns None, the AI fallback is triggered.
+REQUIRED_FIELDS = ["title"]
+
 
 class DataProcessor:
-    """Two-stage extraction engine with DataFrame cleaning utilities.
+    """Cost-aware two-stage extraction engine with DataFrame cleaning utilities.
 
-    Stage 1: Fast DOM extraction via BeautifulSoup.
-    Stage 2: LLM fallback via src.ai_parser if Stage 1 fails.
+    Stage 1: Fast DOM extraction via BeautifulSoup (zero cost).
+    Stage 2: LLM fallback ONLY when required fields are missing — indicating
+             the website layout changed and selectors need updating.
     """
 
     def __init__(self):
         self.df: pd.DataFrame = pd.DataFrame()
+        self.llm_fallback_triggered: bool = False
 
     # ------------------------------------------------------------------
     # Stage 1: DOM-based extraction
@@ -62,10 +69,10 @@ class DataProcessor:
                         desc_el = item.select_one("p, .description, .summary, .text")
                         link_el = item.select_one("a[href]")
                         rows.append({
-                            "title": title_el.get_text(strip=True) if title_el else "",
-                            "price": price_el.get_text(strip=True) if price_el else "",
-                            "description": desc_el.get_text(strip=True) if desc_el else "",
-                            "url": link_el["href"] if link_el else "",
+                            "title": title_el.get_text(strip=True) if title_el else None,
+                            "price": price_el.get_text(strip=True) if price_el else None,
+                            "description": desc_el.get_text(strip=True) if desc_el else None,
+                            "url": link_el["href"] if link_el else None,
                         })
                     logger.info(
                         "DOM extraction (selector '%s'): %d items extracted.",
@@ -81,32 +88,82 @@ class DataProcessor:
             return None
 
     # ------------------------------------------------------------------
-    # Stage 2: LLM fallback
+    # Cost-aware validation
+    # ------------------------------------------------------------------
+
+    def _has_missing_required_fields(self, records: list[dict]) -> list[str]:
+        """Check if any required fields are None across extracted records.
+
+        Returns a list of field names that are missing.
+        """
+        missing = set()
+        for record in records:
+            for field in REQUIRED_FIELDS:
+                if record.get(field) is None:
+                    missing.add(field)
+        return list(missing)
+
+    # ------------------------------------------------------------------
+    # Stage 2: Cost-aware LLM fallback
     # ------------------------------------------------------------------
 
     def _extract_with_llm(self, html: str) -> list[dict]:
-        """Fallback: use LLM to extract structured data from raw HTML."""
+        """Fallback: convert HTML → Markdown (save tokens), then use Gemini
+        with Pydantic structured outputs to extract missing fields."""
         from src.ai_parser import extract_with_llm, ExtractedData
 
-        logger.info("Falling back to LLM extraction.")
+        self.llm_fallback_triggered = True
+
+        # Convert to markdown to reduce token costs (~80% reduction)
+        markdown_content = md(html, strip=["img", "script", "style", "nav", "footer"])
+        lines = [line.strip() for line in markdown_content.splitlines() if line.strip()]
+        markdown_content = "\n".join(lines)
+
+        logger.warning(
+            "[COST-AWARE] AI fallback triggered. HTML=%d chars → Markdown=%d chars. "
+            "DOM selectors likely need updating for this site.",
+            len(html), len(markdown_content),
+        )
+
         results = extract_with_llm(html, schema=ExtractedData)
         return [r.model_dump() for r in results]
 
     # ------------------------------------------------------------------
-    # Public: two-stage extract
+    # Public: cost-aware two-stage extract
     # ------------------------------------------------------------------
 
     def extract(self, html: str) -> list[dict]:
-        """Two-stage extraction: DOM first, LLM fallback on failure."""
-        # Stage 1
+        """Cost-aware extraction: DOM first, LLM ONLY when required fields are missing.
+
+        The LLM is never called unnecessarily. It only fires when:
+        1. DOM extraction returns None (no data found at all), OR
+        2. DOM extraction returns records but required fields are None
+           (indicating a layout change broke the selectors).
+        """
+        self.llm_fallback_triggered = False
+
+        # Stage 1: Fast DOM extraction (zero cost)
         try:
             records = self._extract_with_dom(html)
-            if records:
-                return records
         except Exception as exc:
-            logger.warning("Stage 1 (DOM) failed: %s. Triggering LLM fallback.", exc)
+            logger.warning("Stage 1 (DOM) crashed: %s. Will attempt LLM.", exc)
+            records = None
 
-        # Stage 2
+        if records:
+            # Validate: are required fields present?
+            missing = self._has_missing_required_fields(records)
+            if not missing:
+                logger.info("DOM extraction successful. No AI cost incurred.")
+                return records
+
+            # Required fields missing → layout likely changed
+            logger.warning(
+                "[COST-AWARE] Required fields missing from DOM extraction: %s. "
+                "Triggering LLM fallback. UPDATE YOUR SELECTORS to avoid future costs.",
+                missing,
+            )
+
+        # Stage 2: LLM fallback (costs money — only when necessary)
         records = self._extract_with_llm(html)
         if records:
             return records

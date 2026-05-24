@@ -62,5 +62,11 @@ def parse_arguments() -> argparse.Namespace:
         default=False,
         help="Push tasks to AWS SQS queue instead of executing locally",
     )
+    parser.add_argument(
+        "--webhook",
+        type=str,
+        default=None,
+        help="Webhook URL to deliver cleaned data to (e.g. Zapier, Make.com, custom API)",
+    )
 
     return parser.parse_args()

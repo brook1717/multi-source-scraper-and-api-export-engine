@@ -9,6 +9,7 @@ from src.processor import DataProcessor
 from src.exporter import DataExporter
 from src.proxy_manager import ProxyManager
 from src.queue_manager import SQSManager
+from src.delivery import WebhookDeliverer
 
 logger = setup_logger(__name__)
 
@@ -111,6 +112,14 @@ def main():
             output_path = exporter.export_to_csv(args.output)
 
         logger.info("Pipeline complete. Output saved to: %s", output_path)
+
+        # 7. Optional webhook delivery
+        if args.webhook:
+            logger.info("Webhook delivery enabled: %s", args.webhook)
+            deliverer = WebhookDeliverer(webhook_url=args.webhook)
+            records_to_send = df.to_dict(orient="records")
+            result = deliverer.deliver_batch(records_to_send)
+            logger.info("Webhook delivery result: %s", result)
 
     except KeyboardInterrupt:
         logger.info("Operation cancelled by user.")
