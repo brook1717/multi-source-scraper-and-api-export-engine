@@ -66,3 +66,44 @@ class DataFetcher:
         except requests.RequestException as exc:
             logger.error("Unexpected request error for %s: %s", url, exc)
             raise
+
+    def fetch_all_pages(
+        self,
+        base_url: str,
+        params: dict | None = None,
+        max_pages: int = 10,
+        page_param: str = "page",
+        start_page: int = 1,
+    ) -> list[dict]:
+        """Fetch multiple pages of JSON data and return aggregated results.
+
+        Loops through pages using *page_param* (default 'page') starting at
+        *start_page* until the response returns an empty list or *max_pages*
+        is reached.
+        """
+        params = dict(params) if params else {}
+        all_results: list[dict] = []
+
+        for page in range(start_page, start_page + max_pages):
+            params[page_param] = page
+            logger.info("Fetching page %d of %s", page, base_url)
+
+            response = self.fetch_data(base_url, params=params)
+            data = response.json()
+
+            # Handle responses that are a list or a dict with a results key
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("results") or data.get("data") or data.get("items") or []
+            else:
+                items = []
+
+            if not items:
+                logger.info("No more data at page %d. Stopping.", page)
+                break
+
+            all_results.extend(items)
+            logger.info("Page %d returned %d items (total: %d)", page, len(items), len(all_results))
+
+        return all_results
