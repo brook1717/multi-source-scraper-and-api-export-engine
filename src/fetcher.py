@@ -1,5 +1,7 @@
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
 from src.logger import setup_logger
 
@@ -107,3 +109,45 @@ class DataFetcher:
             logger.info("Page %d returned %d items (total: %d)", page, len(items), len(all_results))
 
         return all_results
+
+
+class BrowserFetcher:
+    """Stealth browser fetcher using Playwright to bypass Cloudflare and JS-heavy pages."""
+
+    def __init__(self, proxy: str | None = None, timeout: int = DEFAULT_TIMEOUT * 1000):
+        self.proxy = proxy
+        self.timeout = timeout
+
+    def fetch_html(self, url: str) -> str:
+        """Launch a headless Chromium browser, apply stealth, and return the page HTML.
+
+        Uses networkidle to wait for JavaScript frameworks to fully load.
+        """
+        logger.info("BrowserFetcher navigating to: %s", url)
+
+        launch_options: dict = {"headless": True}
+        if self.proxy:
+            launch_options["proxy"] = {"server": self.proxy}
+
+        playwright = sync_playwright().start()
+        browser = None
+        try:
+            browser = playwright.chromium.launch(**launch_options)
+            context = browser.new_context()
+            page = context.new_page()
+
+            stealth_sync(page)
+
+            page.goto(url, timeout=self.timeout)
+            page.wait_for_load_state("networkidle", timeout=self.timeout)
+
+            html = page.content()
+            logger.info("BrowserFetcher success: %s (%d chars)", url, len(html))
+            return html
+        except Exception as exc:
+            logger.error("BrowserFetcher error for %s: %s", url, exc)
+            raise
+        finally:
+            if browser:
+                browser.close()
+            playwright.stop()

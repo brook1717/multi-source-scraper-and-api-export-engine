@@ -1,3 +1,6 @@
 requests
 pandas
 tenacity
+playwright
+playwright-stealth
+fake-useragent
