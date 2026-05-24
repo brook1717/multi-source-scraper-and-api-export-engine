@@ -56,5 +56,11 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Path to a text file containing proxy list (one per line)",
     )
+    parser.add_argument(
+        "--queue",
+        action="store_true",
+        default=False,
+        help="Push tasks to AWS SQS queue instead of executing locally",
+    )
 
     return parser.parse_args()

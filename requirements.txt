@@ -9,8 +9,7 @@ sqlalchemy[asyncio]
 psycopg2-binary
 asyncpg
 alembic
-celery
-redis
+boto3
 instructor
 pydantic
 google-genai
