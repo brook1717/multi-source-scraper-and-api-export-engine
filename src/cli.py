@@ -44,5 +44,17 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Optional value for the filter key",
     )
+    parser.add_argument(
+        "--use-browser",
+        action="store_true",
+        default=False,
+        help="Use Playwright stealth browser instead of standard requests",
+    )
+    parser.add_argument(
+        "--proxies",
+        type=str,
+        default=None,
+        help="Path to a text file containing proxy list (one per line)",
+    )
 
     return parser.parse_args()
