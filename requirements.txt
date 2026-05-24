@@ -16,3 +16,7 @@ pydantic
 google-genai
 markdownify
 beautifulsoup4
+fastapi
+uvicorn[standard]
+apify
+apify-client
