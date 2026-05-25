@@ -126,7 +126,8 @@ class DataProcessor:
         )
 
         results = extract_with_llm(html, schema=ExtractedData)
-        return [r.model_dump() for r in results]
+        # Stamp every AI-healed record so the DB can audit LLM usage
+        return [{**r.model_dump(), "ai_fallback_used": True} for r in results]
 
     # ------------------------------------------------------------------
     # Public: cost-aware two-stage extract

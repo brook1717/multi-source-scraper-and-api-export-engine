@@ -22,3 +22,18 @@ output "ecs_cluster_name" {
   description = "ECS cluster name"
   value       = aws_ecs_cluster.main.name
 }
+
+output "sqs_main_queue_url" {
+  description = "Main SQS FIFO queue URL (scraping tasks)"
+  value       = aws_sqs_queue.scraper_main.url
+}
+
+output "sqs_alert_queue_url" {
+  description = "SQS alert queue URL (price-drop events)"
+  value       = aws_sqs_queue.scraper_alert.url
+}
+
+output "sqs_dlq_url" {
+  description = "SQS Dead-Letter Queue URL (failed URLs after 3 attempts)"
+  value       = aws_sqs_queue.scraper_dlq.url
+}

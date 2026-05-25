@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -48,12 +48,14 @@ class ScrapedRecord(Base):
     source_url = Column(String, nullable=False, unique=True, index=True)
     data_hash = Column(String, nullable=False, unique=True)
     payload = Column(JSONB, nullable=False)
+    price = Column(Float, nullable=True)
     scraped_at = Column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
     status = Column(String, nullable=False, default="success")
+    ai_fallback_used = Column(Boolean, nullable=False, default=False)
 
     job = relationship("ScrapeJob", back_populates="records")
 
