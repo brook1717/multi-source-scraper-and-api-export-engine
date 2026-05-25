@@ -6,6 +6,8 @@ Run:
     streamlit run src/dashboard.py
 """
 
+import hashlib
+import hmac
 import os
 from datetime import datetime, timezone
 
@@ -14,6 +16,10 @@ import requests
 import streamlit as st
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
+_AUTH_USERNAME = os.environ.get("DASHBOARD_USERNAME", "")
+_AUTH_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "")
+_AUTH_ENABLED  = bool(_AUTH_USERNAME and _AUTH_PASSWORD)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page config — must be the first Streamlit call
@@ -121,10 +127,123 @@ st.markdown(
 
         /* Hide Streamlit watermark */
         #MainMenu, footer { visibility: hidden; }
+
+        /* ── Login card ─────────────────────────────────────────── */
+        .login-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 70vh;
+        }
+        .login-card {
+            background: #ffffff;
+            border: 1px solid #E5E7EB;
+            border-radius: 16px;
+            padding: 2.5rem 2.8rem;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.07);
+        }
+        .login-logo {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            background: linear-gradient(90deg, #7C3AED, #2563EB);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+            margin-bottom: 0.25rem;
+        }
+        .login-subtitle {
+            text-align: center;
+            color: #6B7280;
+            font-size: 0.88rem;
+            margin-bottom: 1.8rem;
+        }
+        .login-error {
+            background: #FEF2F2;
+            border: 1px solid #FECACA;
+            border-radius: 8px;
+            color: #DC2626;
+            font-size: 0.88rem;
+            padding: 0.6rem 1rem;
+            margin-bottom: 1rem;
+            text-align: center;
+        }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Authentication gate
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _credentials_match(username: str, password: str) -> bool:
+    """Timing-safe comparison against env-configured credentials."""
+    user_ok = hmac.compare_digest(
+        username.encode(), _AUTH_USERNAME.encode()
+    )
+    pass_ok = hmac.compare_digest(
+        password.encode(), _AUTH_PASSWORD.encode()
+    )
+    return user_ok and pass_ok
+
+
+def _render_login_page() -> None:
+    """Render the branded login card and handle form submission."""
+    _, center, _ = st.columns([1, 1.6, 1])
+    with center:
+        st.markdown(
+            """
+            <div class="login-card">
+                <div class="login-logo">⚡ SignalPipe</div>
+                <div class="login-subtitle">Competitor Intelligence Platform</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.session_state.get("_login_failed"):
+            st.error("Invalid username or password. Please try again.", icon="🔒")
+
+        with st.form("login_form", clear_on_submit=True):
+            username = st.text_input("Username", placeholder="Enter username")
+            password = st.text_input(
+                "Password", type="password", placeholder="Enter password"
+            )
+            submitted = st.form_submit_button(
+                "Sign In", type="primary", use_container_width=True
+            )
+
+        if submitted:
+            if _credentials_match(username, password):
+                st.session_state["authenticated"] = True
+                st.session_state["_login_failed"] = False
+                st.session_state["_auth_user"] = username
+                st.rerun()
+            else:
+                st.session_state["_login_failed"] = True
+                st.rerun()
+
+        st.caption(
+            "Access is restricted. Contact your administrator for credentials."
+        )
+
+
+def _require_auth() -> None:
+    """Block rendering and show the login page if auth is enabled and the
+    user is not yet authenticated. Call this before any app content."""
+    if not _AUTH_ENABLED:
+        return  # Auth disabled — open access (dev / no env vars set)
+
+    if not st.session_state.get("authenticated"):
+        _render_login_page()
+        st.stop()  # Hard stop — nothing below this runs until logged in
+
+
+_require_auth()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Header
@@ -276,6 +395,16 @@ def _format_dlq_dataframe(messages: list[dict]) -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    if _AUTH_ENABLED:
+        user = st.session_state.get("_auth_user", "user")
+        st.markdown(f"**Signed in as** `{user}`")
+        if st.button("Sign Out", type="secondary", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.session_state["_login_failed"] = False
+            st.session_state["_auth_user"] = ""
+            st.rerun()
+        st.divider()
+
     st.markdown("### ⚙️ Connection")
     st.caption(f"**API Base URL**\n\n`{API_BASE_URL}`")
 

@@ -47,6 +47,12 @@ GEMINI_API_KEY=your-gemini-api-key
 WEBHOOK_URL=https://hooks.zapier.com/hooks/catch/123456/abcdef/
 
 # ----------------------------------------------------------
+# Streamlit Dashboard Auth (leave blank to disable)
+# ----------------------------------------------------------
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=change-me-before-demo
+
+# ----------------------------------------------------------
 # FastAPI Server
 # ----------------------------------------------------------
 API_HOST=0.0.0.0
