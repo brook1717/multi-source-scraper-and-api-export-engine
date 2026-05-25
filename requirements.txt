@@ -20,3 +20,4 @@ uvicorn[standard]
 apify
 apify-client
 streamlit
+moto[sqs]
