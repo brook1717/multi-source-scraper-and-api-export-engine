@@ -68,5 +68,18 @@ def parse_arguments() -> argparse.Namespace:
         default=None,
         help="Webhook URL to deliver cleaned data to (e.g. Zapier, Make.com, custom API)",
     )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=50,
+        metavar="N",
+        help=(
+            "Safety ceiling: maximum number of pages to fetch per domain "
+            "(default: 50). If the site returns data at page N the fetcher "
+            "stops, logs a [SAFETY CEILING] warning, and saves collected data. "
+            "Prevents infinite pagination from draining proxy bandwidth or "
+            "generating unexpected cloud costs."
+        ),
+    )
 
     return parser.parse_args()

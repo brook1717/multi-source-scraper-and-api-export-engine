@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 import pandas as pd
@@ -12,6 +13,42 @@ from src.queue_manager import SQSManager
 from src.delivery import WebhookDeliverer
 
 logger = setup_logger(__name__)
+
+
+async def _save_ceiling_records(source_url: str, raw_data: list[dict]) -> None:
+    """Persist partial records to PostgreSQL when the pagination ceiling is hit.
+
+    Each record is upserted individually so that any already-stored rows are
+    updated rather than duplicated. Failures are logged but never raise — the
+    local export must still complete.
+    """
+    try:
+        from src.db.database import async_session
+        from src.db.crud import upsert_record
+
+        async with async_session() as session:
+            for record in raw_data:
+                try:
+                    url = record.get("url") or source_url
+                    await upsert_record(
+                        session=session,
+                        url=url,
+                        payload=record,
+                        status="ceiling_truncated",
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to upsert ceiling record %s: %s", url, exc)
+
+        logger.info(
+            "[SAFETY CEILING] %d partial records persisted to PostgreSQL for %s.",
+            len(raw_data), source_url,
+        )
+    except Exception as exc:
+        logger.error(
+            "[SAFETY CEILING] PostgreSQL save failed for %s: %s. "
+            "Records will still be exported locally.",
+            source_url, exc,
+        )
 
 
 def main():
@@ -85,8 +122,20 @@ def main():
             if args.search:
                 params["search"] = args.search
 
-            raw_data = fetcher.fetch_all_pages(args.source, params=params)
+            raw_data = fetcher.fetch_all_pages(
+                args.source,
+                params=params,
+                max_pages=args.max_pages,
+            )
             logger.info("Fetched %d raw records.", len(raw_data))
+
+            if fetcher.last_fetch_hit_ceiling:
+                logger.warning(
+                    "[SAFETY CEILING] Pagination ceiling (%d pages) hit for %s. "
+                    "Persisting %d partial records to PostgreSQL before export.",
+                    args.max_pages, args.source, len(raw_data),
+                )
+                asyncio.run(_save_ceiling_records(args.source, raw_data))
 
         if not raw_data:
             logger.warning("No data fetched. Exiting.")

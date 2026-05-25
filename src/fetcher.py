@@ -8,6 +8,7 @@ from src.logger import setup_logger
 logger = setup_logger(__name__)
 
 DEFAULT_TIMEOUT = 30
+DEFAULT_MAX_PAGES = 50
 DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -33,6 +34,7 @@ class DataFetcher:
         self.session = requests.Session()
         self.session.headers.update(headers or DEFAULT_HEADERS)
         self.timeout = timeout
+        self.last_fetch_hit_ceiling: bool = False
 
     @retry(
         retry=retry_if_exception(_is_retryable),
@@ -73,7 +75,7 @@ class DataFetcher:
         self,
         base_url: str,
         params: dict | None = None,
-        max_pages: int = 10,
+        max_pages: int = DEFAULT_MAX_PAGES,
         page_param: str = "page",
         start_page: int = 1,
     ) -> list[dict]:
@@ -81,14 +83,20 @@ class DataFetcher:
 
         Loops through pages using *page_param* (default 'page') starting at
         *start_page* until the response returns an empty list or *max_pages*
-        is reached.
+        is reached (the safety ceiling).
+
+        If the ceiling is hit while data is still being returned, a
+        [SAFETY CEILING] warning is logged and self.last_fetch_hit_ceiling
+        is set to True so the caller can persist partial data and alert.
         """
+        self.last_fetch_hit_ceiling = False
         params = dict(params) if params else {}
         all_results: list[dict] = []
+        _last_page_had_data = False
 
         for page in range(start_page, start_page + max_pages):
             params[page_param] = page
-            logger.info("Fetching page %d of %s", page, base_url)
+            logger.info("Fetching page %d / max %d of %s", page, max_pages, base_url)
 
             response = self.fetch_data(base_url, params=params)
             data = response.json()
@@ -102,11 +110,26 @@ class DataFetcher:
                 items = []
 
             if not items:
-                logger.info("No more data at page %d. Stopping.", page)
+                logger.info("No more data at page %d. Stopping naturally.", page)
+                _last_page_had_data = False
                 break
 
             all_results.extend(items)
-            logger.info("Page %d returned %d items (total: %d)", page, len(items), len(all_results))
+            _last_page_had_data = True
+            logger.info("Page %d: %d items (running total: %d)", page, len(items), len(all_results))
+
+        else:
+            # for-else fires ONLY when the loop ran to completion without a break,
+            # meaning we exited because we hit max_pages — not because data ran out.
+            if _last_page_had_data:
+                self.last_fetch_hit_ceiling = True
+                logger.warning(
+                    "[SAFETY CEILING] max_pages=%d reached for %s. "
+                    "%d items collected but the site likely has more pages. "
+                    "Pagination truncated to prevent runaway proxy/compute costs. "
+                    "Raise --max-pages if full extraction is required.",
+                    max_pages, base_url, len(all_results),
+                )
 
         return all_results
 

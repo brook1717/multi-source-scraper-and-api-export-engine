@@ -42,6 +42,15 @@ class JobRequest(BaseModel):
     use_browser: bool = Field(False, description="Use Playwright stealth browser")
     proxy_config: dict | None = Field(None, description="Optional proxy config")
     schema_hint: str | None = Field(None, description="Target extraction schema hint")
+    max_pages: int = Field(
+        50,
+        ge=1,
+        le=500,
+        description=(
+            "Safety ceiling: max pages to paginate per URL (default 50). "
+            "Prevents runaway pagination from generating unexpected compute costs."
+        ),
+    )
 
 
 class JobResponse(BaseModel):
@@ -94,12 +103,16 @@ async def create_job(request: JobRequest):
                 url,
                 use_browser=request.use_browser,
                 proxy_config=request.proxy_config,
+                max_pages=request.max_pages,
             ),
             process_and_store_task.s(),
         )
         pipeline.apply_async()
 
-    logger.info("Job %s created with %d URLs.", job_id, len(request.urls))
+    logger.info(
+        "Job %s created with %d URLs (max_pages=%d).",
+        job_id, len(request.urls), request.max_pages,
+    )
 
     return JobResponse(
         job_id=str(job_id),
