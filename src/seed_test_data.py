@@ -22,6 +22,10 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 
+# ── Windows: asyncpg is incompatible with ProactorEventLoop (the default) ────
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # ── Fake AWS creds so boto3 / moto don't complain ────────────────────────────
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "test")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test")
@@ -327,7 +331,7 @@ async def step_4_ai_fallback_flag() -> None:
             session=session,
             url=target["url"],
             payload={**target["payload"], "healed": True},
-            price=target["updated_price"],
+            price=target["initial_price"],
             ai_fallback_used=True,
         )
 
@@ -431,6 +435,7 @@ def step_6_dlq_inspection(dlq_url: str, sqs_client) -> None:
     sqs_client.send_message(
         QueueUrl=dlq_url,
         MessageBody=json.dumps(dead_payload),
+        MessageGroupId="dlq-test",
     )
     info("Manually injected 1 failed message into DLQ.")
 
@@ -540,6 +545,11 @@ def main() -> None:
 
     # DB-dependent steps (always use real local postgres)
     asyncio.run(_run_db_steps())
+
+    # Dispose the engine pool so asyncpg connections bound to the first
+    # event loop are not reused by the second asyncio.run() call below.
+    from src.db.database import engine as _engine
+    _engine.sync_engine.dispose()
 
     # SQS steps — moto in-process mock (no real AWS needed)
     section("SQS TESTS  (moto in-process mock)")

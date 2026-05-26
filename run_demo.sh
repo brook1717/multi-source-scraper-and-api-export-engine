@@ -51,6 +51,48 @@ else
     _warn ".env not found — using defaults. Run: python print_secrets_template.py"
 fi
 
+# Local DB URL must match docker-compose credentials (scraper:scraper)
+export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://scraper:scraper@localhost:5432/scraper}"
+
+# ── Python resolver ──────────────────────────────────────────────────────────
+# In WSL the system python3 has no project packages — use the Windows Python
+# (accessible via WSL interop as python.exe) where pip just installed them.
+if python.exe --version &>/dev/null; then
+    PY="python.exe"
+elif python3 --version &>/dev/null; then
+    PY="python3"
+else
+    _err "No Python found. Install Python 3.12 or run: pip install -r requirements.txt"
+    exit 1
+fi
+_info "Python interpreter: $($PY --version 2>&1) → $PY"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pre-flight: release ports 8000 and 8501 if held by a previous run
+# ─────────────────────────────────────────────────────────────────────────────
+_free_port() {
+    local port=$1
+    # Works from WSL: call netstat.exe + taskkill.exe via Windows interop
+    local pids
+    pids=$(netstat.exe -ano 2>/dev/null \
+        | grep -E "0\.0\.0\.0:${port}|127\.0\.0\.1:${port}" \
+        | grep "LISTENING" \
+        | awk '{print $NF}' \
+        | sort -u \
+        || true)
+    for pid in $pids; do
+        [[ -z "$pid" || "$pid" == "0" ]] && continue
+        taskkill.exe /PID "$pid" /F &>/dev/null && true \
+            && _info "Released port ${port} (killed PID ${pid})."
+    done
+    return 0
+}
+
+_info "Checking for stale processes on ports 8000 and 8501..."
+_free_port 8000
+_free_port 8501
+sleep 1
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PID tracking — populated as processes start
 # ─────────────────────────────────────────────────────────────────────────────
@@ -73,8 +115,12 @@ cleanup() {
         kill "$API_PID" 2>/dev/null && _ok "FastAPI stopped."
     fi
 
-    _step "Stopping PostgreSQL container"
-    docker compose stop postgres 2>/dev/null && _ok "Postgres stopped."
+    if [[ "${EXISTING_DB:-false}" == "false" ]]; then
+        _step "Stopping PostgreSQL container"
+        docker compose stop postgres 2>/dev/null && _ok "Postgres stopped."
+    else
+        _info "Postgres was pre-existing — leaving it running."
+    fi
 
     echo ""
     _ok "Demo session ended cleanly."
@@ -90,22 +136,37 @@ trap cleanup SIGINT SIGTERM
 _header
 _step "Step 1/4 · Starting PostgreSQL container"
 
-docker compose up postgres -d
+# If something is already listening on 5432, skip docker compose up to avoid
+# a "port already allocated" error (e.g. another project's postgres container).
+if pg_isready -h localhost -p 5432 -q 2>/dev/null; then
+    _warn "Port 5432 is already in use — skipping docker compose up."
+    _info "Connecting to whichever Postgres is running on localhost:5432."
+    _info "If the DB credentials differ, set DATABASE_URL in .env."
 
-_info "Waiting for Postgres to be ready..."
-MAX_WAIT=30
-ELAPSED=0
-until docker compose exec -T postgres pg_isready -U scraper -q 2>/dev/null; do
-    if [[ $ELAPSED -ge $MAX_WAIT ]]; then
-        _err "Postgres did not become ready within ${MAX_WAIT}s. Check: docker compose logs postgres"
-        exit 1
-    fi
-    sleep 1
-    ELAPSED=$((ELAPSED + 1))
-    printf "."
-done
-echo ""
-_ok "PostgreSQL is ready (${ELAPSED}s)."
+    # Try to ensure our schema exists on whatever is running
+    EXISTING_DB=true
+else
+    EXISTING_DB=false
+    docker compose up postgres -d
+
+    _info "Waiting for Postgres to be ready..."
+    MAX_WAIT=30
+    ELAPSED=0
+    CONTAINER=$(docker compose ps -q postgres 2>/dev/null | head -1)
+    until [[ "$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null)" == "healthy" ]]; do
+        if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+            _err "Postgres did not become healthy within ${MAX_WAIT}s."
+            _err "Check: docker compose logs postgres"
+            exit 1
+        fi
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+        printf "."
+    done
+    [[ $ELAPSED -gt 0 ]] && echo ""
+fi
+
+_ok "PostgreSQL is ready."
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 2 — Pipeline validation
@@ -115,7 +176,7 @@ _step "Step 2/4 · Running pipeline validation suite (seed_test_data.py)"
 _info "Tests: DB upsert · price-drop delta trigger · SQS round-trip (moto mock)"
 echo ""
 
-if python -m src.seed_test_data; then
+if DATABASE_URL="$DATABASE_URL" $PY -m src.seed_test_data; then
     echo ""
     _ok "All validation checks passed — pipeline is healthy."
 else
@@ -131,7 +192,7 @@ fi
 _header
 _step "Step 3/4 · Starting FastAPI backend on http://localhost:8000"
 
-uvicorn src.api:app \
+DATABASE_URL="$DATABASE_URL" $PY -m uvicorn src.api:app \
     --host 0.0.0.0 \
     --port 8000 \
     --log-level warning \
@@ -166,7 +227,7 @@ export DASHBOARD_USERNAME="${DASHBOARD_USERNAME:-}"
 export DASHBOARD_PASSWORD="${DASHBOARD_PASSWORD:-}"
 export API_BASE_URL="${API_BASE_URL:-http://localhost:8000}"
 
-streamlit run src/dashboard.py \
+DATABASE_URL="$DATABASE_URL" $PY -m streamlit run src/dashboard.py \
     --server.port 8501 \
     --server.address 0.0.0.0 \
     --server.headless true \

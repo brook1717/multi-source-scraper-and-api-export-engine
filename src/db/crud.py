@@ -12,9 +12,6 @@ from src.logger import setup_logger
 
 logger = setup_logger(__name__)
 
-SQS_ALERT_QUEUE_URL = os.environ.get("SQS_ALERT_QUEUE_URL", "")
-
-
 def _compute_hash(url: str, payload: dict) -> str:
     """Generate a deterministic SHA-256 hash from the URL and payload."""
     raw = json.dumps({"url": url, "payload": payload}, sort_keys=True)
@@ -32,7 +29,8 @@ def _push_price_drop_alert(
     Called synchronously (boto3 is blocking) from within the async upsert
     because the SQS call itself is very fast and does not need awaiting.
     """
-    if not SQS_ALERT_QUEUE_URL:
+    alert_queue_url = os.environ.get("SQS_ALERT_QUEUE_URL", "")
+    if not alert_queue_url:
         logger.warning("SQS_ALERT_QUEUE_URL not set — price-drop alert not sent for %s", url)
         return
 
@@ -52,7 +50,7 @@ def _push_price_drop_alert(
     try:
         client = boto3.client("sqs", region_name=os.environ.get("AWS_REGION", "us-east-1"))
         client.send_message(
-            QueueUrl=SQS_ALERT_QUEUE_URL,
+            QueueUrl=alert_queue_url,
             MessageBody=json.dumps(alert_payload),
         )
         logger.info(

@@ -8,7 +8,7 @@ logger = setup_logger(__name__)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/scraper",
+    "postgresql+asyncpg://scraper:scraper@localhost:5432/scraper",
 )
 
 engine = create_async_engine(DATABASE_URL, echo=False, pool_size=20, max_overflow=10)
